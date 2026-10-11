@@ -1,0 +1,16 @@
+# Tested on a MacBook Pro M1 (macOS 15) with Python 3.12 and on Linux with Python 3.13.
+torch==2.14.1
+gymnasium==1.3.0
+stable-baselines3==2.9.0
+numpy==2.5.3
+scipy==1.18.1
+matplotlib==3.11.2
+pandas==2.3.3
+arch==7.2.0
+seaborn==0.13.2
+absl-py
+pillow
+python-pptx==1.0.2
+pytest
+# rliable is installed separately from GitHub (see README); its PyPI release pins an old arch
+# version that has no build for Python 3.12 on Apple silicon.
