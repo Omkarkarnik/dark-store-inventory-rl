@@ -66,3 +66,22 @@ def model_order_fn(model):
         action, _ = model.predict((x / OBS_SCALE).astype(np.float32), deterministic=True)
         return action
     return fn
+
+
+def visited_states(order_fn, d, L, p, warmup=1_000):
+    """Distinct states a policy visits on demand path d, with their visit shares."""
+    x = np.zeros((1, L))
+    x[0, 0] = LAM
+    counts = {}
+    for t, dt in enumerate(d):
+        if t >= warmup:
+            key = tuple(int(v) for v in x[0])
+            counts[key] = counts.get(key, 0) + 1
+        q = int(np.clip(np.rint(np.asarray(order_fn(x), dtype=float).reshape(1)[0]), 0, QMAX))
+        left = max(x[0, 0] - dt, 0.0)
+        x[0, 0] = min(left + x[0, 1], S0_CAP)
+        x[0, 1:-1] = x[0, 2:]
+        x[0, -1] = q
+    states = np.array(list(counts), dtype=float)
+    w = np.array(list(counts.values()), dtype=float)
+    return states, w / w.sum()

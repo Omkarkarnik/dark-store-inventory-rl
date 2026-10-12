@@ -1,7 +1,10 @@
 """Shared figure style: one color per algorithm everywhere, neutral grays for the baselines."""
+import os
+
 import matplotlib
 
-matplotlib.use("Agg")
+if os.environ.get("INVRL_SHOW") != "1":      # draw off-screen unless the demo asks for a live window
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 COLORS = {"PPO": "#2a78d6", "A2C": "#eb6834", "DQN": "#1baf7a"}

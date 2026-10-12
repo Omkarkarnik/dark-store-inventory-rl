@@ -66,7 +66,7 @@ def test_optimal_cost_matches_published_and_simulation(name, L, p):
     assert sim == pytest.approx(dp["g"], rel=0.01)
 
 
-@pytest.mark.parametrize("algo", ["A2C", "DQN"])
+@pytest.mark.parametrize("algo", ["PPO", "A2C", "DQN"])
 def test_training_is_reproducible(algo):
     """Same seed, same machine -> identical network weights."""
     import torch

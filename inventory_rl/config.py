@@ -55,13 +55,15 @@ WORKERS = 4             # runs at a time (one per M1 performance core)
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "results"
 
-# Quick check of the whole pipeline (about 10 minutes): SMOKE_TEST=1 ./run_all.sh
+# Quick check of the whole pipeline: SMOKE_TEST=1 ./run_experiments.sh && SMOKE_TEST=1 ./make_outputs.sh
 # Tiny budgets, results written to results_smoke/ so they never mix with the real results.
 SMOKE = os.environ.get("SMOKE_TEST") == "1"
 if SMOKE:
     TOTAL_STEPS, EVAL_EVERY, TUNE_STEPS = 50_000, 25_000, 25_000
     TEST_PERIODS, SEARCH_PERIODS = 5_000, 5_000
     RESULTS = ROOT / "results_smoke"
+if os.environ.get("INVRL_RESULTS"):          # optional: analyse a results folder somewhere else
+    RESULTS = Path(os.environ["INVRL_RESULTS"]).resolve()
 RUNS_DIR = RESULTS / "runs"
 TUNE_DIR = RESULTS / "tuning"
 MODELS_DIR = RESULTS / "models"

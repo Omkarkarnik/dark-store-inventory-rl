@@ -1,0 +1,17 @@
+{
+ "algo": "PPO",
+ "instance": "L4_p9",
+ "seed": 2,
+ "periods": 30,
+ "demand_seed": 99000,
+ "avg_cost": {
+  "PPO agent": 6.633333333333334,
+  "Optimal (DP)": 6.0,
+  "Best base-stock (S=28)": 5.466666666666667
+ },
+ "agent_name": "PPO agent",
+ "optimal_name": "Optimal (DP)",
+ "base_name": "Best base-stock (S=28)",
+ "lost_periods": 8,
+ "gif": "demo_PPO_L4_p9.gif"
+}

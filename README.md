@@ -40,31 +40,35 @@ in transit, which is why simple rules fall short and learning is worth trying.
 
 * macOS on Apple silicon (tested on a MacBook Pro M1, 8 GB) or Linux. CPU only; no GPU is used or needed.
 * Python 3.12 (Miniforge/conda recommended).
-* About 2 hours of compute for the full experiment on an M1, under 1 GB of memory in total.
+* About 2 hours of compute for the full experiment on an M1; each run uses roughly 300 MB of memory.
 
 ## Setup
 
 ```bash
+# 0. Get the code
+git clone https://github.com/YOUR-USERNAME/dark-store-inventory-rl.git
+cd dark-store-inventory-rl
+
 # 1. Create the environment (skip if you already have one)
 conda create -n rlproj python=3.12 -y
 conda activate rlproj            # or: source ~/miniforge3/bin/activate rlproj
 
 # 2. Install the packages
 pip install -r requirements.txt
-pip install "git+https://github.com/google-research/rliable.git@3ccd9f4dea577a04d3d2b557f259aac08badbd81"
 
 # 3. Run the unit tests (about 1 minute)
 python -m pytest -q
 ```
 
-If the rliable install fails, everything still runs: `inventory_rl/stats.py` then computes the same IQM and
-stratified bootstrap intervals with NumPy, and `results/summary.json` records which one was used.
+If rliable is missing, everything still runs: `inventory_rl/stats.py` then computes the same IQM and stratified
+bootstrap intervals with NumPy, and `results/summary.json` records which one was used. (The original run installed
+rliable 1.2.0 from its GitHub repository, the same version as on PyPI.)
 
 ## Run the project
 
 ```bash
 caffeinate -i ./run_experiments.sh   # steps 1-3: baselines, tuning sweep, 60 training runs (~2 hours on an M1)
-./make_outputs.sh                    # steps 4-6: statistics and figures, demo, slides and script (~5 minutes)
+./make_outputs.sh                    # steps 4-5: statistics, figures, and the demo (~5 minutes)
 ```
 
 `caffeinate -i` keeps the Mac awake (macOS only; leave it out on Linux). Each step can also be run on its own:
@@ -76,7 +80,6 @@ caffeinate -i ./run_experiments.sh   # steps 1-3: baselines, tuning sweep, 60 tr
 | 3 | `python scripts/03_train.py` | `results/runs/*.json`, `results/models/*.zip` |
 | 4 | `python scripts/04_analyze.py` | `results/summary.json`, `results/tables/`, `results/figures/` |
 | 5 | `python scripts/05_demo.py` | `results/demo/` (add `--show` for a live window) |
-| 6 | `python scripts/06_make_presentation.py` | `presentation/` |
 
 Finished runs are skipped, so an interrupted run can simply be started again. If time is short,
 `./run_experiments.sh --steps 1000000` halves the steps per run but keeps all seeds, the fallback stated in Part 1.
@@ -87,20 +90,37 @@ uses tiny budgets and writes to `results_smoke/`, which git ignores.
 ## Results
 
 After the run, the main numbers are in `results/tables/final_results.md`, every run is listed in
-`results/tables/every_run.csv`, and the figures are in `results/figures/`. `results/run_log.txt` is the full log.
+`results/tables/every_run.csv`, the hypothesis checks are in `results/summary.json`, and the figures are in
+`results/figures/`. `results/run_log.txt` is the full log.
+
+* `results/figures/`: learning curves, final test gaps, performance profile, sample efficiency, training time,
+  the learned ordering rule versus the optimal one (`policy_map_L2_p9.png`), and a demo snapshot.
+* `results/demo/`: an animation of the trained agent running the store next to the optimal and base-stock policies.
+  `python scripts/05_demo.py --show` plays it live in a window (used for the recorded demo).
+
+The committed `results/` folder holds the outputs of the run on my M1, so the results can be read without rerunning
+anything.
+
+## Known limitations
+
+* For PPO and A2C, Stable-Baselines3 seeds environment copy k of seed s with s + k, so neighbouring seeds share most
+  of their training demand streams (their networks and actions still differ). Seeds are therefore not fully
+  independent; DQN's are.
+* Learning-curve evaluations start each 5,000-period validation path from the same starting state with no warm-up,
+  which adds a small bias (well under 1%) to validation gaps. The final test uses a 1,000-period warm-up.
+* All agents use a discount factor of 0.99 while being judged on average cost, a possible source of bias noted in Part 1.
+* Demand is stationary Poisson; real dark-store demand shifts over time.
 
 ## Reproducibility
 
 Every run is seeded (training seeds 0 to 4; validation, search, and test demand use separate fixed seeds), uses
-one CPU thread, and saves its model. `tests/test_inventory.py` checks that two runs with the same seed give
-identical network weights. Results can differ slightly between machines because floating-point arithmetic
+one CPU thread, and saves its model. `tests/test_inventory.py` checks that two short runs with the same seed give
+identical network weights for each algorithm. Results can differ slightly between machines because floating-point arithmetic
 differs between processors.
 
 ## AI use
 
-Claude (Anthropic) wrote the code in this repository, its tests, and this README, and checked them in a cloud
-sandbox at small budgets. I ran the full experiment on my MacBook Pro M1, reviewed the code and results, and made
-all commits. The feasibility test from Part 1 was a separate script and is not part of this repository.
+I used Claude (Anthropic) to help write the code. I ran all experiments on my MacBook Pro M1 and checked the results.
 
 ## References
 

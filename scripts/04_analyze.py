@@ -17,7 +17,7 @@ from inventory_rl.config import (ALGOS, COLLAPSE_RISE, EVAL_PATHS, EVAL_PERIODS,
 from inventory_rl.dp import policy_order_fn
 from inventory_rl.plotstyle import COLORS, INK, INK2, MARKERS, NAMES, plt, save
 from inventory_rl.runner import log
-from inventory_rl.simulate import demand_paths, simulate
+from inventory_rl.simulate import demand_paths, simulate, visited_states
 from inventory_rl import stats
 
 
@@ -107,7 +107,8 @@ def main():
                 steps_to_5_median=float(np.median([m["steps_to_5"] if m["steps_to_5"] is not None else np.inf for m in ms])),
                 reached_5=len(reached), collapses=int(sum(m["collapse"] for m in ms)),
                 train_minutes=float(np.mean([m["train_minutes"] for m in ms])),
-                beats_base=bool(cost_hi < ref[i]["test_cost_base"]), beats_capped=bool(cost_hi < ref[i]["test_cost_capped"]))
+                beats_base=bool(cost_hi < ref[i]["test_cost_base"]), beats_capped=bool(cost_hi < ref[i]["test_cost_capped"]),
+                worse_than_base=int(np.sum(costs > ref[i]["test_cost_base"])))
 
     def cell(a, i):
         return cells.get(f"{a}|{i}")
@@ -122,7 +123,11 @@ def main():
                           train_minutes=float(np.mean([M[k]["train_minutes"] for k in M if k[0] == a])),
                           seed_std=float(np.mean([cell(a, i)["gap_std"] for i in INSTANCES if cell(a, i)])),
                           success_rate=float(np.mean([M[k]["test_gap"] <= SUCCESS_GAP for k in M if k[0] == a])),
-                          collapses=int(sum(M[k]["collapse"] for k in M if k[0] == a)))
+                          collapses=int(sum(M[k]["collapse"] for k in M if k[0] == a)),
+                          worse_than_base=int(sum(cells[f"{a}|{i}"]["worse_than_base"] for i in INSTANCES if f"{a}|{i}" in cells)),
+                          reached_5_instances=int(sum(np.isfinite(cells[f"{a}|{i}"]["steps_to_5_median"]) for i in INSTANCES
+                                                      if f"{a}|{i}" in cells)),
+                          early_share=early_share(M, a))
 
     # Hypotheses (a policy "beats" another when the upper end of its 95% interval for cost is below the other's cost)
     H = {}
@@ -151,7 +156,8 @@ def main():
     for i in ("L2_p4", "L2_p9"):
         if all(cell(a, i) for a in ALGOS):
             med = {a: cell(a, i)["steps_to_5_median"] for a in ALGOS}
-            h4[i] = dict(median_steps=med, dqn_fastest=bool(np.isfinite(med["DQN"]) and med["DQN"] < min(med["PPO"], med["A2C"])))
+            h4[i] = dict(median_steps=med, dqn_fastest=bool(np.isfinite(med["DQN"]) and med["DQN"] < min(med["PPO"], med["A2C"])),
+                         tie=bool(np.isfinite(med["DQN"]) and med["DQN"] == min(med["PPO"], med["A2C"])))
     H["H4"] = dict(statement="DQN will reach the 5% threshold in fewer environment steps than PPO and A2C on the L = 2 instances.",
                    supported=bool(h4) and all(v["dqn_fastest"] for v in h4.values()), detail=h4)
     beat_capped = {a: [i for i in INSTANCES if cell(a, i) and cell(a, i)["beats_capped"]] for a in ALGOS}
@@ -168,7 +174,9 @@ def main():
         within_5_percent_everywhere=dict(met=bool(c3), algorithms=c3),
         stretch_beats_capped_somewhere=dict(met=any(beat_capped[a] for a in ALGOS), detail=beat_capped))
 
-    summary = dict(optimal={i: dict(dp=g[i], published=base[i]["published"], matches=base[i]["matches_published"],
+    agreement = policy_agreement(runs, base)
+
+    summary = dict(policy_agreement=agreement, optimal={i: dict(dp=g[i], published=base[i]["published"], matches=base[i]["matches_published"],
                                     dp_seconds=base[i]["dp_seconds"], params=base[i]["params"]) for i in INSTANCES},
                    reference=ref, cells=cells, aggregate=agg, hypotheses=H, success=success, tuning=tuning,
                    n_runs=len(runs), steps_per_run=int(np.median([r["steps"] for r in runs.values()])) if runs else 0,
@@ -182,6 +190,23 @@ def main():
     log("Step 4 finished -> results/summary.json, results/tables/, results/figures/", logfile)
     for h, v in H.items():
         log(f"{h}: {'supported' if v['supported'] else 'not supported'}", logfile)
+
+
+def early_share(M, a):
+    """Share of the total improvement in validation gap (median over seeds, averaged over instances) that is
+    reached in the first quarter of training."""
+    shares = []
+    for i in INSTANCES:
+        curves = [M[(a, i, s)] for s in TRAIN_SEEDS if (a, i, s) in M]
+        if not curves:
+            continue
+        n = min(len(c["curve_gap"]) for c in curves)
+        med = np.median([c["curve_gap"][:n] for c in curves], axis=0)
+        q = max(1, (n - 1) // 4)
+        total = med[0] - med[-1]
+        if total > 0:
+            shares.append(float((med[0] - med[q]) / total))
+    return float(np.mean(shares)) if shares else float("nan")
 
 
 def fmt_ci(v, ci):
@@ -236,8 +261,8 @@ def figures(M, cells, agg, ref, g, base):
             Y = np.array([c["curve_gap"][:n] for c in curves])
             ax.fill_between(x, Y.min(0), Y.max(0), color=COLORS[a], alpha=0.15, linewidth=0)
             ax.plot(x, np.median(Y, 0), color=COLORS[a], label=a)
-        ax.axhline(ref[i]["val_gap_base"], color=INK2, ls="--", lw=1.5, label="Best base-stock")
-        ax.axhline(ref[i]["val_gap_capped"], color=INK2, ls=":", lw=1.8, label="Capped base-stock")
+        ax.axhline(ref[i]["test_gap_base"], color=INK2, ls="--", lw=1.5, label="Best base-stock (test)")
+        ax.axhline(ref[i]["test_gap_capped"], color=INK2, ls=":", lw=1.8, label="Capped base-stock (test)")
         ax.axhline(0, color=INK, lw=1)
         ax.set_ylim(-1, 30)
         ax.set_title(NAMES[i])
@@ -246,18 +271,29 @@ def figures(M, cells, agg, ref, g, base):
     for ax in axes[:, 0]:
         ax.set_ylabel("Gap to optimal cost (%)")
     axes[0, 0].legend(loc="upper right", ncol=2, fontsize=10)
-    fig.suptitle("Learning curves: median of five seeds, band = best to worst seed (gaps above 30% are cut off)", fontsize=12)
+    fig.suptitle("Learning curves on the validation paths: median of five seeds, band = best to worst seed "
+                 "(gaps above 30% are cut off)", fontsize=12)
     save(fig, FIG_DIR / "learning_curves.png")
 
     # 2. Final test gaps, every seed plus IQM with 95% CI
     fig, axes = plt.subplots(1, 4, figsize=(14, 4.6), sharey=False)
     for ax, i in zip(axes, insts):
+        # y range: baselines and every 95% interval, plus seeds unless one is far out (those get an arrow and a label)
+        his = [cells[f"{a}|{i}"]["gap_ci"][1] for a in ALGOS if f"{a}|{i}" in cells]
+        level = max([ref[i]["test_gap_base"]] + [cells[f"{a}|{i}"]["gap_iqm"] for a in ALGOS if f"{a}|{i}" in cells])
+        core = max([level] + [h_ for h_ in his if h_ <= 2.5 * level])
+        seeds_all = [g_ for a in ALGOS if f"{a}|{i}" in cells for g_ in cells[f"{a}|{i}"]["gaps"]]
+        top = max([core] + [v for v in seeds_all if v <= 2.5 * core]) * 1.15 + 0.3
         for k, a in enumerate(ALGOS):
             c = cells.get(f"{a}|{i}")
             if not c:
                 continue
             xs = np.full(len(c["gaps"]), k) + np.linspace(-0.12, 0.12, len(c["gaps"]))
-            ax.scatter(xs, c["gaps"], s=22, color=COLORS[a], alpha=0.45, zorder=2, edgecolor="none")
+            gs = np.array(c["gaps"])
+            ax.scatter(xs[gs <= top], gs[gs <= top], s=22, color=COLORS[a], alpha=0.45, zorder=2, edgecolor="none")
+            for x_, g_ in zip(xs[gs > top], gs[gs > top]):
+                ax.scatter([x_], [top * 0.97], marker="^", s=40, color=COLORS[a], zorder=3)
+                ax.text(x_ + 0.08, top * 0.97, f"{g_:.0f}%", fontsize=8, color=INK2, va="center")
             ax.errorbar([k + 0.3], [c["gap_iqm"]], yerr=[[c["gap_iqm"] - c["gap_ci"][0]], [c["gap_ci"][1] - c["gap_iqm"]]],
                         fmt=MARKERS[a], color=COLORS[a], ms=8, capsize=4, lw=2, zorder=3)
         ax.axhline(ref[i]["test_gap_base"], color=INK2, ls="--", lw=1.5)
@@ -267,10 +303,12 @@ def figures(M, cells, agg, ref, g, base):
         ax.text(2.45, ref[i]["test_gap_capped"], " capped", va="center", fontsize=9, color=INK2)
         ax.set_xticks(range(len(ALGOS)), ALGOS)
         ax.set_xlim(-0.5, 3.2)
+        ax.set_ylim(min(-0.5, min(seeds_all + [0]) - 0.3), top)
         ax.set_title(NAMES[i])
         ax.grid(axis="x", visible=False)
     axes[0].set_ylabel("Gap to optimal cost (%)")
-    fig.suptitle("Final test (10 held-out demand paths x 100,000 periods): dots = seeds, marker = IQM with 95% CI", fontsize=12)
+    fig.suptitle("Final test (10 held-out demand paths x 100,000 periods): dots = seeds, marker = IQM with 95% CI, "
+                 "triangles = seeds off the top of the chart", fontsize=12)
     save(fig, FIG_DIR / "final_gaps.png")
 
     # 3. Performance profile
@@ -330,10 +368,43 @@ def figures(M, cells, agg, ref, g, base):
         bars = ax.bar([a for a in ALGOS if a in agg], vals, color=[COLORS[a] for a in ALGOS if a in agg], width=0.55)
         for b, v in zip(bars, vals):
             ax.text(b.get_x() + b.get_width() / 2, v, f"{v:.1f} min", ha="center", va="bottom", fontsize=11, color=INK)
-        ax.set_ylabel("Minutes per 2M-step run (mean)")
+        ax.set_ylabel("Training minutes per run (mean,\nnot counting evaluation)")
         ax.set_title("Training time per run on the M1 (one CPU core each)")
         ax.grid(axis="x", visible=False)
         save(fig, FIG_DIR / "training_time.png")
+
+
+def wcorr(x, y, w):
+    """Weighted correlation; negative means larger orders when less stock is on hand or on the way."""
+    mx, my = np.sum(w * x), np.sum(w * y)
+    vx, vy = np.sum(w * (x - mx) ** 2), np.sum(w * (y - my) ** 2)
+    return float(np.sum(w * (x - mx) * (y - my)) / np.sqrt(vx * vy)) if vx > 0 and vy > 0 else float("nan")
+
+
+def policy_agreement(runs, base):
+    """Share of the states the optimal policy actually visits (weighted by how often) where each trained
+    policy orders within one unit of the optimal order. Averaged over seeds."""
+    from inventory_rl.agents import ALGO_CLASSES
+    out = {}
+    for inst, (L, p) in INSTANCES.items():
+        opt_fn = policy_order_fn(np.load(DP_DIR / f"optimal_policy_{inst}.npy"), L)
+        X, w = visited_states(opt_fn, demand_paths(1, 21_000, 40_000)[0], L, p)
+        a_opt = opt_fn(X)
+        out[inst] = {}
+        for a in ALGOS:
+            shares, corrs = [], []
+            for s in TRAIN_SEEDS:
+                f = MODELS_DIR / f"{a}_{inst}_s{s}.zip"
+                if (a, inst, s) in runs and f.exists():
+                    model = ALGO_CLASSES[a].load(f, device="cpu")
+                    acts, _ = model.predict((X / OBS_SCALE).astype(np.float32), deterministic=True)
+                    shares.append(float(np.sum(w * (np.abs(np.asarray(acts) - a_opt) <= 1))))
+                    corrs.append(wcorr(np.asarray(acts, dtype=float), X.sum(axis=1), w))
+            if shares:
+                out[inst][a] = dict(mean=float(np.mean(shares)), per_seed=shares,
+                                    order_vs_position_corr=float(np.nanmean(corrs)))
+        out[inst]["optimal_order_vs_position_corr"] = wcorr(np.asarray(a_opt, dtype=float), X.sum(axis=1), w)
+    return out
 
 
 def policy_maps(M, base, inst):
@@ -345,9 +416,9 @@ def policy_maps(M, base, inst):
     X = np.stack([S0.ravel(), S1.ravel()], 1).astype(float)
     panels = []
     opt = np.load(DP_DIR / f"optimal_policy_{inst}.npy")
-    panels.append(("Optimal (DP)", policy_order_fn(opt, L)(X)))
+    panels.append(("Optimal (DP)\n", policy_order_fn(opt, L)(X)))
     prm = base[inst]["params"]["capped_base_stock"]
-    panels.append((f"Capped base-stock (S={prm['S']}, cap={prm['cap']})", capped_base_stock_fn(prm["S"], prm["cap"])(X)))
+    panels.append((f"Capped base-stock\n(S={prm['S']}, cap={prm['cap']})", capped_base_stock_fn(prm["S"], prm["cap"])(X)))
     for a in ALGOS:
         seeds = [s for s in TRAIN_SEEDS if (a, inst, s) in M and (MODELS_DIR / f"{a}_{inst}_s{s}.zip").exists()]
         if not seeds:
@@ -355,17 +426,18 @@ def policy_maps(M, base, inst):
         med = sorted(seeds, key=lambda s: M[(a, inst, s)]["test_cost"])[len(seeds) // 2]   # median seed
         model = ALGO_CLASSES[a].load(MODELS_DIR / f"{a}_{inst}_s{med}.zip", device="cpu")
         acts, _ = model.predict((X / OBS_SCALE).astype(np.float32), deterministic=True)
-        panels.append((f"{a} (median seed {med})", acts))
+        panels.append((f"{a}\n(median seed {med})", acts))
     fig, axes = plt.subplots(1, len(panels), figsize=(3.3 * len(panels), 3.9), sharey=True)
+    vmax = max(8, max(int(np.max(acts)) for _, acts in panels))      # same color scale for every panel
     for ax, (title, acts) in zip(np.atleast_1d(axes), panels):
-        im = ax.imshow(np.asarray(acts).reshape(len(s0), len(s1)).T, origin="lower", cmap="Blues", vmin=0, vmax=20,
+        im = ax.imshow(np.asarray(acts).reshape(len(s0), len(s1)).T, origin="lower", cmap="Blues", vmin=0, vmax=vmax,
                        extent=[-0.5, 30.5, -0.5, 20.5], aspect="auto")
         ax.set_title(title, fontsize=11)
         ax.set_xlabel("Stock now, s0")
         ax.grid(False)
     np.atleast_1d(axes)[0].set_ylabel("Order arriving next period, s1")
     fig.colorbar(im, ax=axes, shrink=0.85, label="Order quantity")
-    fig.suptitle(f"Ordering rule by state, {NAMES[inst]} (darker = larger order)", fontsize=12)
+    fig.suptitle(f"Ordering rule by state, {NAMES[inst]} (darker = larger order)", fontsize=12, y=1.08)
     save(fig, FIG_DIR / f"policy_map_{inst}.png")
 
 
