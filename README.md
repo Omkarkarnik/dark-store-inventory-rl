@@ -120,7 +120,8 @@ differs between processors.
 
 ## AI use
 
-I used Claude (Anthropic) to help write the code. I ran all experiments on my MacBook Pro M1 and checked the results.
+I used Claude (Anthropic) to assist with organizing and structuring the code. I independently conducted all experiments on my Apple M1 computer and reviewed and verified every result.
+
 
 ## References
 
